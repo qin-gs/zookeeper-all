@@ -156,3 +156,158 @@ ZAB（ZooKeeper Atomic Broadcast 原子广播） 协议是为分布式协调服�
 
 
 
+```
+ docker run -d -p 2181:2181 zookeeper
+ 
+ docker exec -it 6b110cc83db9 /bin/bash
+ 
+ cd bin
+ 
+ zkServer.sh start
+ 
+ zkServer.sh status # 可以查看是 leader 还是 follower
+ 
+ zkCli.sh
+```
+
+
+
+```properties
+# zoo.cnf
+tickTime=2000 # 通信心跳时间，zookeeper服务器与客户端心跳事件(毫秒)
+initLimit = 10 # lf 初始通信时限
+syncLimit = 5 # lf 同步通信时限
+dataDir =   # 数据目录
+clientPort = 2181
+```
+
+
+
+```
+zookeeper 目录下创建文件夹 zkData，里面创建文件 myid
+myid 文件加一行
+2
+
+zoo.cfg 配置如下
+dataDir=/opt/module/zookeeper-3.5.7/zkData
+server.2=hadoop102:2888:3888
+server.3=hadoop103:2888:3888
+server.4=hadoop104:2888:3888
+解析
+server.A=B:C:D
+A: 几号服务器(myid文件夹里面的内容)
+B: 服务器地址
+C: 服务器中 follower 和 leader 服务器交换信息的端口
+D: leader估 故障之后，重新选举使用的端口号
+```
+
+
+
+#### 选举机制
+
+
+
+选举条件：
+
+1. 服务器初始化启动
+2. 服务器运行期间无法和 leader 保持连接
+
+
+
+当某台服务器进入选举流程是时：
+
+1. 当前集群中已存在 leader
+
+   被告知该服务器当前的 leader 信息，服务器需要和 leader 建立连接，状态同步
+
+2. 当前集群中不存在 leader
+
+   sid：服务id，用来表示唯一的一台服务器，和 myid 一样
+
+   zxid：事务id，表示一次服务器状态的变更
+
+   epoch：每个 leader 任期的代号 (投完一次票这个数值会增加)
+
+   (epoch, zxid, sid) 依次比较，大的胜出
+
+
+
+**第一次启动选举**：
+
+(1) 服务器1启动，发起一次选举。服务器1投自己一票。此时服务器1票数一票，不够半数以上(3票)，选举无法完成，服务器1状态保持为 LOOKING;
+
+(2) 服务器2启动，再发起一次选举。服务器1和2分别投自己一 票并交换选票信息:此时服务器1发现服务器2的myid比自己目前投票推举的(服务器1)大，更改选票为推举服务器2。此时服务器1票数0票，服务器2票数2票，没有半数以上结果，选举无法完成，服务器1，2状态保持 LOOKING
+
+(3) 服务器3启动，发起一次选举。此时服务器1和2都会更改选票为服务器3。此次投票结果:服务器l为0票，服务器2为0票，服务器3为3票。此时服务器3的票数已经超过半数，服务器3当选Leader。服务器1，2更改状态为FOLLOWING，服务器3更改状态为LEADING;
+
+(4) 服务器4启动，发起一次选举。此时服务器1，2，3己经不是LOOKING状态，不会更改选票信息。交换选票信息结果:服务器3为3票，服务器4为1票。此时服务器4服从多数，更改选票信息为服务器3，并更改状态为FOLLOWING;
+
+(5) 服务器5启动，同4一样当 follower。
+
+
+
+
+#### 集群启动停止脚本
+
+```sh
+# 创建一个脚本 zk.sh
+#!/bin/bash
+case $1 in 
+"start") {
+  for i in hadop102 hadoop103 hadoop104
+  do
+    echo ------ zookeeper $i 启动 -----
+    ssh $i "/opt/module/zookeeper-3.5.7/bin/zkServer.sh start"
+  done
+}
+;;
+"stop") {
+  for i in hadop102 hadoop103 hadoop104
+  do
+    echo ------ zookeeper $i 停止 -----
+    ssh $i "/opt/module/zookeeper-3.5.7/bin/zkServer.sh stop"
+  done
+}
+;;
+"status") {
+  for i in hadop102 hadoop103 hadoop104
+  do
+    echo ------ zookeeper $i 状态 -----
+    ssh $i "/opt/module/zookeeper-3.5.7/bin/zkServer.sh status"
+  done
+}
+;;
+esac
+
+# 运行脚本启动
+chmod a+x zk.sh
+zh.sh start
+zk.sh status
+zh.sh stop
+```
+
+
+
+#### 客户端的操作
+
+```
+zkClient.sh -server hadoop102:2181 # 可以修改前缀
+
+zkCli # 启动客户端
+ls -s / # 查看节点
+
+[zk: localhost:2181(CONNECTED) 6] ls -s /
+[zookeeper]
+cZxid = 0x0 # 创建节点的事务id
+ctime = Thu Jan 01 00:00:00 UTC 1970 # znode 创建节点的时间
+mZxid = 0x0 # znode 最后更新的事务id(zxid)
+mtime = Thu Jan 01 00:00:00 UTC 1970 # znode 最后修改时间
+pZxid = 0x0 # znode 最后更新的子节点的 zxid
+cversion = -1 # znode 子节点变化号，znode 子节点修改次数
+dataVersion = 0 # znode 数据变化号
+aclVersion = 0 # znode 访问控制列表的变化号
+ephemeralOwner = 0x0 # 如果是临时节点，这个是 znode 拥有者的 sessionid；如果不是临时节点为 0
+dataLength = 0 # znode 数据长度
+numChildren = 1 # znode 子节点数量
+```
+
