@@ -1,4 +1,4 @@
-### zookeeper
+## zookeeper
 
 
 
@@ -311,3 +311,113 @@ dataLength = 0 # znode 数据长度
 numChildren = 1 # znode 子节点数量
 ```
 
+
+
+#### 节点类型和操作
+
+1. 持久节点：客户端和服务器端断开连接之后，创建的节点不删除
+
+   - 带序号 (一个单调递增的计数器 znode_001, znode_002)
+   - 不带序号
+
+   在分布式系统中，顺序号可以被用于为所有的事件进行全局排序，客户端通过序号推断事件的顺序
+
+2. 临时节点：客户端和服务器端断开连接之后，创建的节点会被删除
+
+
+
+```
+创建不带序号持久节点
+create /first "first"
+create /first/part1 "first_part1"
+ls /first
+get -s first # 获取创建时的信息
+
+创建带序号的持久节点 (重复创建会自动增加，如果不带序号会报错节点已存在)
+create -s /first/part2 "first_part2"
+# Created /first/part20000000001
+
+退出客户端，依然存在
+quit
+
+
+
+创建临时节点
+create -e /first/part3 "first_part3"
+带序号的临时节点
+create -e -s /first/part4 "first_part4"
+
+
+修改节点的值
+get -s /first/part1
+set /first/part1 "new_first_part1"
+
+
+删除节点
+ls / # 查看一下节点
+delete /first/part1 # 删除节点(有子节点会报错)
+deleteall /first # 递归删除所有节点
+
+stat /first 查看节点状态信息
+```
+
+
+
+#### 监听器原理
+
+- 客户端：去注册自己关注哪个服务端
+
+  1. main 线程
+
+  2. 创建 zkClient 客户端，创建两个线程：connect 负责网络连接通信，listener 负责监听
+
+  3. 通过 connect 线程将注册的监听事件发送给 zookeeper
+
+  4. zookeeper 监听到有数据或路径变化，将消息发送给 listener 线程
+
+  5. listener 线程内部调用 process 方法
+
+  监听：节点数据变化，节点增减变化，
+
+- 服务端：发送变化之后去通知客户端
+
+
+
+```
+注册监听器
+get -s /first # 查看节点数据
+get -w /first # 监听节点数据，注册一次只能监听一次
+
+set /first "new_first" # 换一个客户端修改数据
+
+ls -w /first # 监听节点数量
+create /first/part4 "first_part4" # 在另一台服务器上创建节点
+```
+
+
+
+#### 客户端先服务端写数据流程
+
+写请求发送给如下节点
+
+- leader：半数服务器完成写请求(ack)才会返回
+
+- follower：将请求转给 leader
+
+
+
+#### 服务器动态上下线监听
+
+服务器启动时创建临时节点，注册信息
+
+客户端获取到当前服务器列表，并注册监听
+
+当服某台务器下线时，zookeeper 通知客户端
+
+
+
+#### 分布式锁
+
+1. 接收到请求之后，在 /lock 节点下创建一个临时顺序节点
+2. 判断自己是不是当前节点下最小的节点，是的话获取到锁，否则对前一个节点进行监听
+3. 获取到锁之后，处理业务，最后删除节点释放锁，通知下面的节点
